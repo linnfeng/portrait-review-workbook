@@ -1,0 +1,70 @@
+name: Deploy reviewed portrait guide
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Render reviewed source
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import html
+          import re
+          
+          source = Path('README.md').read_bytes()
+          expected = 'b98d5aa55138fc5f09d68b4cab40e35375b0e3bd34c32ba27f923b3c13d31a1f'
+          if hashlib.sha256(source).hexdigest() != expected:
+              raise SystemExit('README does not match the reviewed source')
+          text = source.decode('utf-8')
+          
+          def inline(value):
+              escaped = html.escape(value, quote=True)
+              escaped = re.sub(r'!\[([^\]]*)\]\((https://[^)]+)\)', r'<img alt="\1" src="\2">', escaped)
+              return re.sub(r'\[([^\]]+)\]\((https://[^)]+)\)', r'<a href="\2">\1</a>', escaped)
+          
+          blocks = []
+          for block in re.split(r'\n\s*\n', text.strip()):
+              if block.startswith('# '):
+                  blocks.append('<h1>' + inline(block[2:]) + '</h1>')
+              elif block.startswith('## '):
+                  blocks.append('<h2>' + inline(block[3:]) + '</h2>')
+              elif re.match(r'^\d+\. ', block):
+                  items = [re.sub(r'^\d+\.\s*', '', line) for line in block.splitlines()]
+                  blocks.append('<ol>' + ''.join('<li>' + inline(item) + '</li>' for item in items) + '</ol>')
+              else:
+                  blocks.append('<p>' + inline(block.replace('\n', ' ')) + '</p>')
+          
+          appendix = '''<section><h2>Using the review as a repeatable process</h2>
+          <p>This page presents a practical checklist rather than a claim that a portrait is authentic or a promise of a particular outcome. Start with a current reference, keep the original private, and review any generated image at the size where it will actually be displayed. A written checklist can make the same decision easier to revisit after a new crop, hairstyle, or change of setting.</p>
+          <p>The <a href="https://aidatingphoto.org/">dating app photos</a> resource mentioned here is optional. I am associated with the project, and AI assisted in preparing this material. The guide does not claim a personal trial or independent product review. The homepage describes credit-based photo generation; consult its current terms and privacy information before uploading any image.</p>
+          <p>To make the checklist useful, record only the decision and the reason you chose it. A private note such as “crop keeps the full head visible” is more useful than a score detached from context. Ask for permission before including anyone else, check the final image for incidental private details, and remove old copies when you no longer need them.</p></section>'''
+          page = '''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Portrait Review Workbook</title><style>body{font:18px/1.65 system-ui,sans-serif;max-width:76ch;margin:3rem auto;padding:0 1rem;color:#222}img{max-width:100%;height:auto}a{color:#1755a2}li{margin:.45rem 0}</style></head><body><main>''' + '\n'.join(blocks) + appendix + '</main></body></html>'
+          out = Path('generated_site')
+          out.mkdir(exist_ok=True)
+          (out / 'index.html').write_text(page, encoding='utf-8')
+          print('Generated reviewed portrait guide')
+          PY
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: generated_site
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
